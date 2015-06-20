@@ -1,6 +1,9 @@
 [{
-	"caption": "yUML: Open Diagram in Browser",
-	"command": "yuml"
+    "caption": "yUML: Open Diagram in Browser",
+    "command": "yuml_preview"
+},{
+    "caption": "yUML: Open Diagram Image in Browser",
+    "command": "yuml"
 },{
     "caption": "Preferences: yUML Settings – Default",
     "command": "open_file", "args":

@@ -27,6 +27,17 @@ import sublime
 import sublime_plugin
 import webbrowser
 
+import os
+import sys
+import traceback
+import tempfile
+import re
+import time
+import codecs
+import cgi
+import string
+
+
 try:
     # Python 3 & Sublime Text 3
     from urllib.request import quote as url_quote
@@ -60,6 +71,29 @@ def selected_or_all(view):
         return view.substr(sublime.Region(0, view.size()))
 
     return '\n'.join([view.substr(region) for region in view.sel()])
+
+
+def getTempYumlPreviewPath(view):
+    ''' return a permanent full path of the temp whyuml preview file '''
+
+    tmp_filename = '%s.html' % view.id()
+    tmp_dir = tempfile.gettempdir()
+
+    if not os.path.isdir(tmp_dir):  # create dir if not exsits
+        os.makedirs(tmp_dir)
+
+    tmp_fullpath = os.path.join(tmp_dir, tmp_filename)
+    return tmp_fullpath
+
+
+def save_utf8(filename, text):
+    with codecs.open(filename, 'w', encoding='utf-8')as f:
+        f.write(text)
+
+
+def load_utf8(filename):
+    with codecs.open(filename, 'r', encoding='utf-8') as f:
+        return f.read()
 
 
 class YUMLError(Exception):
@@ -101,6 +135,93 @@ class YumlCommand(sublime_plugin.TextCommand):
                 .format(len(ex.url), ex.max_length))
 
             sublime.error_message(message)
+
+
+class YumlPreviewCommand(sublime_plugin.TextCommand):
+    def run(self, edit):
+        yuml_preview = YumlPreview()
+        yuml_preview.run(self.view)
+
+
+class YumlPreviewListener(sublime_plugin.EventListener):
+    def on_post_save_async(self, view):
+        filetypes = [ ".yuml" ]
+        if filetypes and view.file_name().endswith(tuple(filetypes)):
+            temp_file = getTempYumlPreviewPath(view)
+            if os.path.isfile(temp_file):
+                yuml_preview = YumlPreview()
+                yuml_preview.run(view, open_in_browser=False)
+                sublime.status_message('yUML Preview file updated')
+
+
+class YumlPreview:
+    def get_image_url(self):
+        yuml = Yuml(
+            dsl=selected_or_all(self.view),
+            type=self.settings.get('default_type', DEFAULT_TYPE),
+            extension=self.settings.get('default_extension', DEFAULT_EXTENSION),
+            customisations={
+                'style': self.settings.get('default_style', DEFAULT_STYLE),
+                'dir': self.settings.get('default_dir', DEFAULT_DIR),
+                'scale': self.settings.get('default_scale', DEFAULT_SCALE),
+                })
+
+        try:
+            return yuml.url
+        except RequestURITooLong as ex:
+            message = (
+                "Sorry, but the diagram is too big.\n"
+                "\n"
+                "The URL is {} characters long and the longest request "
+                "supported by yUML is {} characters.\n"
+                "\n"
+                "To be fixed in a future release by posting instead of "
+                "getting."
+                .format(len(ex.url), ex.max_length))
+
+            sublime.error_message(message)
+        return None
+
+    def run(self, view, open_in_browser = True):
+        self.view = view
+        self.settings = self.view.settings()
+        self.basepath = os.path.dirname(__file__)
+
+        image_url = self.get_image_url()
+
+        if image_url is None:
+            return
+
+        filepath = os.path.abspath(os.path.join(self.basepath, "template.html"))
+
+        template_html = string.Template(load_utf8(filepath))
+        html = template_html.substitute(image_url = image_url)
+
+        tmp_fullpath = getTempYumlPreviewPath(self.view)
+        save_utf8(tmp_fullpath, html)
+
+        if open_in_browser:
+            self.__class__.open_in_browser(tmp_fullpath)
+
+    @classmethod
+    def open_in_browser(cls, path):
+        if sys.platform == 'darwin':
+            # To open HTML files, Mac OS the open command uses the file
+            # associated with .html. For many developers this is Sublime,
+            # not the default browser. Getting the right value is
+            # embarrassingly difficult.
+            import shlex
+            import subprocess
+            env = {'VERSIONER_PERL_PREFER_32_BIT': 'true'}
+            raw = """perl -MMac::InternetConfig -le 'print +(GetICHelper "http")[1]'"""
+            process = subprocess.Popen(shlex.split(raw), env=env, stdout=subprocess.PIPE)
+            out, err = process.communicate()
+            default_browser = out.strip().decode('utf-8')
+            cmd = "open -a '%s' %s" % (default_browser, path)
+            os.system(cmd)
+        else:
+            desktop.open(path)
+        sublime.status_message('yUML preview launched in default browser')
 
 
 class Yuml(object):
